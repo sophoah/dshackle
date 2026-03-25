@@ -61,24 +61,6 @@ abstract class AbstractHead @JvmOverloads constructor(
 
     private val metrics = mutableSetOf<Meter>()
 
-    init {
-        val className = this.javaClass.simpleName
-        Gauge.builder("stuck_head", delayed) {
-            if (it.get()) 1.0 else 0.0
-        }
-            .tag("upstream", upstreamId)
-            .tag("class", className)
-            .register(Metrics.globalRegistry)
-            .also { metrics.add(it) }
-        Gauge.builder("current_head", forkChoice) {
-            it.getHead()?.height?.toDouble() ?: 0.0
-        }
-            .tag("upstream", upstreamId)
-            .tag("class", className)
-            .register(Metrics.globalRegistry)
-            .also { metrics.add(it) }
-    }
-
     fun follow(source: Flux<BlockContainer>): Disposable {
         return source
             .filter {
@@ -178,6 +160,7 @@ abstract class AbstractHead @JvmOverloads constructor(
         }
         future = null
         metrics.forEach { Metrics.globalRegistry.remove(it) }
+        metrics.clear()
     }
 
     protected open fun onNoHeadUpdates() {
@@ -195,6 +178,23 @@ abstract class AbstractHead @JvmOverloads constructor(
     override fun start() {
         stopping = false
         log.debug("Start ${this.javaClass.simpleName} $upstreamId")
+        if (metrics.isEmpty()) {
+            val className = this.javaClass.simpleName
+            Gauge.builder("stuck_head", delayed) {
+                if (it.get()) 1.0 else 0.0
+            }
+                .tag("upstream", upstreamId)
+                .tag("class", className)
+                .register(Metrics.globalRegistry)
+                .also { metrics.add(it) }
+            Gauge.builder("current_head", forkChoice) {
+                it.getHead()?.height?.toDouble() ?: 0.0
+            }
+                .tag("upstream", upstreamId)
+                .tag("class", className)
+                .register(Metrics.globalRegistry)
+                .also { metrics.add(it) }
+        }
         if (future == null) {
             future = executor.scheduleAtFixedRate(
                 {
