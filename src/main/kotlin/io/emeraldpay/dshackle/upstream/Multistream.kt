@@ -46,6 +46,7 @@ import reactor.core.publisher.Sinks
 import reactor.core.scheduler.Scheduler
 import java.time.Duration
 import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.atomic.AtomicBoolean
 
 /**
  * Aggregation of multiple upstreams responding to a single blockchain
@@ -80,6 +81,7 @@ abstract class Multistream(
     private var subscription: Disposable? = null
 
     private val meters: MutableMap<String, List<Meter.Id>> = HashMap()
+    private val chainMetricsInitialized = AtomicBoolean(false)
     private val observedUpstreams = Sinks.many()
         .multicast()
         .directBestEffort<Upstream>()
@@ -129,6 +131,24 @@ abstract class Multistream(
     }
 
     init {
+        upstreamsSink.asFlux()
+            .publishOn(multistreamEventsScheduler)
+            .subscribe {
+                onUpstreamChange(it)
+            }
+
+        observedUpstreams.asFlux()
+            .flatMap {
+                it.observeState()
+                    .takeUntil { event -> event.type == UpstreamChangeEvent.ChangeType.ADDED }
+            }
+            .subscribe {
+                this.processUpstreamsEvents(it)
+            }
+    }
+
+    private fun initChainMetrics() {
+        if (!chainMetricsInitialized.compareAndSet(false, true)) return
         UpstreamAvailability.entries.forEach { status ->
             Metrics.gauge(
                 "$metrics.availability",
@@ -146,21 +166,6 @@ abstract class Multistream(
         ) {
             getAll().size.toDouble()
         }
-
-        upstreamsSink.asFlux()
-            .publishOn(multistreamEventsScheduler)
-            .subscribe {
-                onUpstreamChange(it)
-            }
-
-        observedUpstreams.asFlux()
-            .flatMap {
-                it.observeState()
-                    .takeUntil { event -> event.type == UpstreamChangeEvent.ChangeType.ADDED }
-            }
-            .subscribe {
-                this.processUpstreamsEvents(it)
-            }
     }
 
     /**
@@ -178,6 +183,7 @@ abstract class Multistream(
             it.getId() == upstream.getId()
         }.also {
             if (it) {
+                initChainMetrics()
                 addUpstreamInternal(upstream)
                 addHead(upstream)
                 monitorUpstream(upstream)
